@@ -19,7 +19,8 @@ import {
   Loader2,
   SlidersHorizontal,
   ZoomIn,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Camera
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { ImageLightboxModal } from './ImageLightboxModal';
@@ -52,6 +53,14 @@ const ResidentSheet: React.FC<ResidentSheetProps> = ({
 }) => {
   const effectiveThresholds = useMemo(() => thresholds || DEFAULT_THRESHOLDS, [thresholds]);
   const [selectedPhoto, setSelectedPhoto] = useState<{ url: string; date: string } | null>(null);
+
+  // 期間内に添付された写真レコード一覧（新しい日付順）
+  const photoRecords = useMemo(() => {
+    return records
+      .filter(r => Boolean(r.imageUrl))
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [records]);
+
   const chartData = useMemo(() => {
     return records.filter(r => !r.isAbsent).map(r => ({
       date: r.date.split('-').slice(1).join('/'),
@@ -75,6 +84,52 @@ const ResidentSheet: React.FC<ResidentSheetProps> = ({
           <p className="text-[11px] text-slate-400 mt-1 tracking-wider font-mono">{startDate} 〜 {endDate}</p>
         </div>
       </div>
+
+      {/* 期間中の添付写真ギャラリー（写真が存在する場合のみ画面表示） */}
+      {photoRecords.length > 0 && (
+        <div className="mb-6 p-4 bg-blue-50/50 border border-blue-200/80 rounded-xl no-print">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <h3 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+              <Camera size={16} className="text-blue-600" />
+              <span>期間内の添付写真一覧 ({photoRecords.length}枚)</span>
+            </h3>
+            <span className="text-[11px] font-medium text-blue-600">クリックで拡大表示</span>
+          </div>
+          <div className="grid grid-cols-2 xs:grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
+            {photoRecords.map((rec, idx) => (
+              <div 
+                key={`${rec.date}-${idx}`}
+                onClick={() => setSelectedPhoto({ url: rec.imageUrl!, date: rec.date })}
+                className="group/card bg-white border border-slate-200 hover:border-blue-500 hover:shadow-md rounded-lg overflow-hidden shadow-2xs transition-all cursor-pointer flex flex-col active:scale-95"
+                title={`${rec.date} の写真を拡大表示`}
+              >
+                <div className="aspect-square w-full bg-slate-100 relative overflow-hidden">
+                  <img 
+                    src={rec.imageUrl} 
+                    alt={`${rec.date} 添付写真`} 
+                    className="w-full h-full object-cover group-hover/card:scale-105 transition-transform" 
+                  />
+                  <div className="absolute inset-0 bg-black/35 opacity-0 group-hover/card:opacity-100 flex items-center justify-center text-white transition-opacity">
+                    <ZoomIn size={18} />
+                  </div>
+                  <span className="absolute bottom-1 left-1 bg-black/65 text-white font-mono text-[9px] px-1 py-0.5 rounded leading-none backdrop-blur-2xs">
+                    {rec.date.split('-').slice(1).join('/')}
+                  </span>
+                </div>
+                {rec.note ? (
+                  <div className="p-1.5 text-[10px] text-slate-700 line-clamp-1 truncate bg-white" title={rec.note}>
+                    {rec.note}
+                  </div>
+                ) : (
+                  <div className="p-1 text-[9px] text-slate-400 text-center bg-slate-50/50">
+                    写真のみ
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {includeCharts && records.length > 0 && chartData.length > 0 && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6 print:grid-cols-2">
@@ -145,7 +200,12 @@ const ResidentSheet: React.FC<ResidentSheetProps> = ({
               <th className="border border-slate-300 px-2 py-2 text-center">SpO₂</th>
               <th className="border border-slate-300 px-2 py-2 text-center">食事(朝/昼/晩)</th>
               <th className="border border-slate-300 px-2 py-2 text-center">排便</th>
-              <th className="border border-slate-300 px-2 py-2 text-left">備考</th>
+              <th className="border border-slate-300 px-2 py-2 text-left min-w-[190px]">
+                <div className="flex items-center gap-1">
+                  <span>備考</span>
+                  <span className="text-[10px] text-slate-500 font-normal">/ 添付写真</span>
+                </div>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -176,7 +236,29 @@ const ResidentSheet: React.FC<ResidentSheetProps> = ({
                   <td className="border border-slate-300 px-2 py-2 font-medium">{rec.date}</td>
                   {rec.isAbsent ? (
                     <td colSpan={7} className="border border-slate-300 px-4 py-2 text-left">
-                      利用無し {rec.note && <span className="ml-2">({rec.note})</span>}
+                      <div className="flex items-center justify-between gap-2.5">
+                        <span className="flex-1">
+                          利用無し {rec.note && <span className="ml-2 text-slate-600 not-italic">({rec.note})</span>}
+                        </span>
+                        {rec.imageUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedPhoto({ url: rec.imageUrl!, date: rec.date })}
+                            className="shrink-0 w-11 h-11 rounded-lg border-2 border-slate-300 hover:border-blue-500 overflow-hidden shadow-xs group/img relative cursor-pointer bg-slate-100 transition-all hover:scale-105 active:scale-95"
+                            title={`${rec.date} の添付写真を拡大表示`}
+                          >
+                            <img 
+                              src={rec.imageUrl} 
+                              alt="添付写真" 
+                              className="w-full h-full object-cover group-hover/img:scale-110 transition-transform" 
+                            />
+                            <div className="absolute inset-0 bg-black/35 opacity-0 group-hover/img:opacity-100 flex flex-col items-center justify-center text-white transition-opacity">
+                              <ZoomIn size={14} />
+                              <span className="text-[7px] font-bold">拡大</span>
+                            </div>
+                          </button>
+                        )}
+                      </div>
                     </td>
                   ) : (
                     <>
@@ -200,23 +282,24 @@ const ResidentSheet: React.FC<ResidentSheetProps> = ({
                         <div>晩 {rec.mealNight.main}/{rec.mealNight.side}</div>
                       </td>
                       <td className="border border-slate-300 px-2 py-2">{rec.bowelCount}</td>
-                      <td className="border border-slate-300 px-2 py-2 text-left whitespace-pre-wrap break-words min-w-[160px]">
-                        <div className="flex items-start justify-between gap-2">
-                          <span className="flex-1">{rec.note || '-'}</span>
+                      <td className="border border-slate-300 px-2 py-2 text-left whitespace-pre-wrap break-words min-w-[190px]">
+                        <div className="flex items-start justify-between gap-2.5">
+                          <span className="flex-1 leading-snug">{rec.note || '-'}</span>
                           {rec.imageUrl && (
                             <button
                               type="button"
                               onClick={() => setSelectedPhoto({ url: rec.imageUrl!, date: rec.date })}
-                              className="shrink-0 w-8 h-8 rounded border border-slate-300 hover:border-blue-500 overflow-hidden shadow-2xs group/img relative cursor-pointer no-print bg-slate-100"
-                              title="添付写真をクリックして拡大"
+                              className="shrink-0 w-12 h-12 rounded-lg border-2 border-slate-300 hover:border-blue-500 overflow-hidden shadow-xs group/img relative cursor-pointer bg-slate-100 transition-all hover:scale-105 active:scale-95"
+                              title={`${rec.date} の添付写真を拡大表示`}
                             >
                               <img 
                                 src={rec.imageUrl} 
                                 alt="添付写真" 
                                 className="w-full h-full object-cover group-hover/img:scale-110 transition-transform" 
                               />
-                              <div className="absolute inset-0 bg-black/25 opacity-0 group-hover/img:opacity-100 flex items-center justify-center text-white transition-opacity">
-                                <ZoomIn size={12} />
+                              <div className="absolute inset-0 bg-black/35 opacity-0 group-hover/img:opacity-100 flex flex-col items-center justify-center text-white transition-opacity">
+                                <ZoomIn size={14} />
+                                <span className="text-[7px] font-bold">拡大</span>
                               </div>
                             </button>
                           )}

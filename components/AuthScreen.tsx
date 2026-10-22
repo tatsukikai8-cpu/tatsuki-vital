@@ -59,7 +59,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ externalError, isCheckin
               <ClipboardList className="text-white w-9 h-9" />
             </div>
             <h1 className="text-2xl font-black tracking-tight">VitalSign Pro</h1>
-            <p className="text-blue-100 text-xs mt-1.5 font-medium">介護施設向けクラウドバイタル管理システム</p>
+            <p className="text-blue-100 text-xs mt-1.5 font-medium">クラウドバイタル管理システム</p>
             <div className="inline-flex items-center gap-1.5 bg-white/15 px-3 py-1 rounded-full text-[11px] font-semibold mt-3.5 text-white backdrop-blur-sm">
               <ShieldCheck size={14} className="text-emerald-300" />
               <span>Google ワークスペース認証</span>

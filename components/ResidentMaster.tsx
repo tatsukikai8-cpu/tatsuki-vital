@@ -1,10 +1,11 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Resident, VitalThresholds } from '../types';
 import { 
   Plus, Trash2, Save, UserCheck, Building, RotateCcw, UserMinus, ChevronUp, ChevronDown, 
   AlertCircle, CheckCircle2, Loader2, Building2, SlidersHorizontal, Activity, Thermometer, 
-  Heart, Wind, ShieldAlert, Sparkles, RefreshCw, Cloud, Terminal, ExternalLink, Copy, Check 
+  Heart, Wind, ShieldAlert, Sparkles, RefreshCw, Cloud, Terminal, ExternalLink, Copy, Check,
+  Lock, LayoutGrid
 } from 'lucide-react';
 import { DEFAULT_THRESHOLDS, THRESHOLDS, getInitialResidentsForFacility } from '../constants';
 
@@ -17,6 +18,7 @@ interface ResidentMasterProps {
   thresholds?: VitalThresholds;
   onThresholdsUpdate?: (thresholds: VitalThresholds) => Promise<void> | void;
   isReadOnly?: boolean;
+  onReturnToInput?: () => void;
 }
 
 const ResidentMaster: React.FC<ResidentMasterProps> = ({ 
@@ -27,48 +29,80 @@ const ResidentMaster: React.FC<ResidentMasterProps> = ({
   onFacilityNameUpdate,
   thresholds,
   onThresholdsUpdate,
-  isReadOnly = false
+  isReadOnly = false,
+  onReturnToInput
 }) => {
   // コンポーネント内で独立して管理するリスト
-  const [localResidents, setLocalResidents] = useState<Resident[]>([]);
-  const [localFacilityName, setLocalFacilityName] = useState<string>(facilityName);
+  const [localResidents, setLocalResidents] = useState<Resident[]>(() => {
+    return Array.isArray(residents) ? [...residents] : [];
+  });
+  const [localFacilityName, setLocalFacilityName] = useState<string>(facilityName || '');
   const [localThresholds, setLocalThresholds] = useState<VitalThresholds>(() => {
-    return thresholds ? { ...thresholds } : { ...DEFAULT_THRESHOLDS };
+    return { ...DEFAULT_THRESHOLDS, ...(thresholds || {}) };
   });
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  // 施設名称専用の保存ステート
+  const [isSavingFacilityName, setIsSavingFacilityName] = useState(false);
+  const [facilityNameSuccess, setFacilityNameSuccess] = useState(false);
+  const [facilityNameError, setFacilityNameError] = useState<string | null>(null);
+
+  const prevFacilityIdRef = useRef(facilityId);
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [showDeployGuide, setShowDeployGuide] = useState(false);
 
   const handleCopyCommand = (cmd: string) => {
-    navigator.clipboard.writeText(cmd);
+    try {
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(cmd).catch(() => {});
+      }
+    } catch {
+      // ignore clipboard error in restricted iframes
+    }
     setCopiedCmd(cmd);
     setTimeout(() => setCopiedCmd(null), 2500);
   };
 
-  // 初期表示時および「保存」が親で行われた時のみ同期
+  // 施設切り替えまたは親ステート同期
   useEffect(() => {
-    // 編集中でない場合のみ、親のデータ（保存された最新データ）を取り込む
+    // 施設IDが変わった場合は無条件に親のデータに同期
+    if (prevFacilityIdRef.current !== facilityId) {
+      prevFacilityIdRef.current = facilityId;
+      setLocalFacilityName(facilityName);
+      setLocalResidents([...residents]);
+      if (thresholds) {
+        setLocalThresholds({ ...thresholds });
+      }
+      setIsDirty(false);
+      setSaveSuccess(false);
+      setSaveError(null);
+      setFacilityNameSuccess(false);
+      setFacilityNameError(null);
+      return;
+    }
+
+    // 編集中でない場合のみ、親の最新データを取り込む
     if (!isDirty) {
       setLocalResidents([...residents]);
     }
-  }, [residents, isDirty]);
+  }, [facilityId, residents, isDirty]);
 
-  // 施設名の同期
+  // 施設名の同期（編集中でない時のみ）
   useEffect(() => {
-    if (!isDirty) {
+    if (!isDirty && prevFacilityIdRef.current === facilityId) {
       setLocalFacilityName(facilityName);
     }
-  }, [facilityName, isDirty]);
+  }, [facilityName, isDirty, facilityId]);
 
-  // 閾値の同期
+  // 閾値の同期（編集中でない時のみ）
   useEffect(() => {
-    if (!isDirty && thresholds) {
+    if (!isDirty && thresholds && prevFacilityIdRef.current === facilityId) {
       setLocalThresholds({ ...thresholds });
     }
-  }, [thresholds, isDirty]);
+  }, [thresholds, isDirty, facilityId]);
 
   const handleUpdate = (id: string, field: keyof Resident, value: string) => {
     const next = localResidents.map(r => r.id === id ? { ...r, [field]: value } : r);
@@ -150,6 +184,34 @@ const ResidentMaster: React.FC<ResidentMasterProps> = ({
     setIsDirty(true);
   };
 
+  // 施設名称のみを即時保存するハンドラー
+  const handleSaveFacilityNameOnly = async () => {
+    const trimmed = localFacilityName.trim();
+    if (!trimmed || isSavingFacilityName || isReadOnly) return;
+    setIsSavingFacilityName(true);
+    setFacilityNameError(null);
+    setFacilityNameSuccess(false);
+
+    try {
+      if (onFacilityNameUpdate) {
+        await onFacilityNameUpdate(trimmed);
+      }
+      setFacilityNameSuccess(true);
+      // 名簿・閾値に変更がなければダーティ状態を解除
+      const residentsUnchanged = JSON.stringify(localResidents) === JSON.stringify(residents);
+      const thresholdsUnchanged = JSON.stringify(localThresholds) === JSON.stringify(thresholds);
+      if (residentsUnchanged && thresholdsUnchanged) {
+        setIsDirty(false);
+      }
+      setTimeout(() => setFacilityNameSuccess(false), 4000);
+    } catch (err: any) {
+      console.error("Facility name save error:", err);
+      setFacilityNameError(err?.message || "施設名称の保存に失敗しました。権限や通信環境をご確認ください。");
+    } finally {
+      setIsSavingFacilityName(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!isDirty || isSaving) return;
     setIsSaving(true);
@@ -157,20 +219,50 @@ const ResidentMaster: React.FC<ResidentMasterProps> = ({
     setSaveSuccess(false);
 
     try {
-      const promises: Promise<any>[] = [
-        Promise.resolve(onUpdate([...localResidents])),
-        Promise.resolve(onFacilityNameUpdate(localFacilityName))
-      ];
-      if (onThresholdsUpdate) {
-        promises.push(Promise.resolve(onThresholdsUpdate(localThresholds)));
+      const trimmedFacilityName = localFacilityName.trim();
+      let hasError = false;
+      const errorDetails: string[] = [];
+
+      // 1. 施設名称の保存（変更されている場合）
+      if (trimmedFacilityName && trimmedFacilityName !== facilityName) {
+        try {
+          await onFacilityNameUpdate(trimmedFacilityName);
+        } catch (err: any) {
+          hasError = true;
+          errorDetails.push(`施設名保存: ${err?.message || 'エラー'}`);
+        }
       }
-      await Promise.all(promises);
-      setIsDirty(false);
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 4000);
+
+      // 2. 警告閾値の保存（変更されている場合）
+      if (onThresholdsUpdate && JSON.stringify(localThresholds) !== JSON.stringify(thresholds)) {
+        try {
+          await onThresholdsUpdate(localThresholds);
+        } catch (err: any) {
+          hasError = true;
+          errorDetails.push(`警告閾値保存: ${err?.message || 'エラー'}`);
+        }
+      }
+
+      // 3. 名簿の保存（変更されている場合）
+      if (JSON.stringify(localResidents) !== JSON.stringify(residents)) {
+        try {
+          await onUpdate([...localResidents]);
+        } catch (err: any) {
+          hasError = true;
+          errorDetails.push(`名簿保存: ${err?.message || 'エラー'}`);
+        }
+      }
+
+      if (hasError) {
+        setSaveError(errorDetails.join(' / '));
+      } else {
+        setIsDirty(false);
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 4000);
+      }
     } catch (err: any) {
       console.error("Save error:", err);
-      setSaveError("設定の保存に失敗しました。通信環境をご確認のうえ再試行してください。");
+      setSaveError(err?.message || "設定の保存に失敗しました。権限や通信環境をご確認のうえ再試行してください。");
     } finally {
       setIsSaving(false);
     }
@@ -182,6 +274,8 @@ const ResidentMaster: React.FC<ResidentMasterProps> = ({
     setLocalThresholds(thresholds ? { ...thresholds } : { ...DEFAULT_THRESHOLDS });
     setIsDirty(false);
     setSaveError(null);
+    setFacilityNameError(null);
+    setFacilityNameSuccess(false);
   };
 
   const handleDefaultSample = () => {
@@ -193,15 +287,27 @@ const ResidentMaster: React.FC<ResidentMasterProps> = ({
     <div className="space-y-6">
       {/* 閲覧専用バナー */}
       {isReadOnly && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-amber-900 text-xs no-print shadow-xs">
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-900 text-xs no-print shadow-xs">
           <div className="flex items-center gap-2">
             <ShieldAlert size={18} className="text-amber-600 shrink-0" />
-            <span className="font-bold">【閲覧専用モード】施設基本設定・警告閾値・名簿の編集権限がありません（閲覧のみ）。</span>
+            <span className="font-bold">【閲覧専用モード】施設基本設定・警告閾値・名簿の閲覧が可能です（編集・保存はロックされています）。</span>
           </div>
-          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-800 bg-amber-100 px-2 py-0.5 rounded border border-amber-300 shrink-0">
-            <Lock size={12} />
-            <span>マスタ変更には「editor」権限が必要です</span>
-          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-800 bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
+              <Lock size={12} />
+              <span>閲覧のみ（編集不可）</span>
+            </span>
+            {onReturnToInput && (
+              <button
+                type="button"
+                onClick={onReturnToInput}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-lg font-bold text-xs shrink-0 flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+              >
+                <LayoutGrid size={13} />
+                <span>一括入力画面へ戻る</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -217,26 +323,78 @@ const ResidentMaster: React.FC<ResidentMasterProps> = ({
             <span>対象施設ID: {facilityId}</span>
           </span>
         </div>
-        <div className="max-w-md">
-          <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">施設名称</label>
-          <div className="flex gap-2">
+        <div className="max-w-xl">
+          <label className="block text-xs font-semibold text-slate-500 uppercase mb-1.5">
+            施設名称 <span className="text-red-500">*</span>
+          </label>
+          <div className="flex flex-col sm:flex-row gap-2">
             <input 
               type="text" 
               value={localFacilityName}
               placeholder="施設名称を入力"
-              disabled={isReadOnly}
+              disabled={isReadOnly || isSavingFacilityName}
               onChange={(e) => {
                 if (isReadOnly) return;
                 setLocalFacilityName(e.target.value);
                 setIsDirty(true);
+                setFacilityNameSuccess(false);
+                setFacilityNameError(null);
               }}
-              className={`w-full border rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-medium text-slate-800 ${
-                isReadOnly ? 'bg-slate-100 cursor-not-allowed text-slate-500' : ''
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !isReadOnly && localFacilityName.trim()) {
+                  e.preventDefault();
+                  handleSaveFacilityNameOnly();
+                }
+              }}
+              className={`flex-1 border rounded-md px-3.5 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none font-medium text-slate-800 ${
+                isReadOnly ? 'bg-slate-100 cursor-not-allowed text-slate-500' : 'bg-white'
               }`}
             />
+            {!isReadOnly && (
+              <button
+                type="button"
+                onClick={handleSaveFacilityNameOnly}
+                disabled={isSavingFacilityName || !localFacilityName.trim()}
+                className={`px-4 py-2.5 rounded-md font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 shrink-0 transition-all shadow-xs ${
+                  isSavingFacilityName
+                    ? 'bg-blue-400 text-white cursor-wait'
+                    : localFacilityName.trim()
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer active:scale-95'
+                      : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+                }`}
+                title="施設名称の変更を保存"
+              >
+                {isSavingFacilityName ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>保存中...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save size={16} />
+                    <span>施設名を保存</span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
-          <p className="text-[11px] text-slate-400 mt-1.5">
-            ※ 変更後、下の『設定を保存』ボタンを押すと施設データベースに永続保存され、ヘッダーや管理表等へ即時反映されます。
+
+          {/* 施設名保存メッセージ */}
+          {facilityNameSuccess && (
+            <div className="mt-2.5 text-xs text-emerald-700 font-semibold flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-lg">
+              <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+              <span>施設名称を「{localFacilityName.trim()}」に更新してデータベースへ保存しました。</span>
+            </div>
+          )}
+          {facilityNameError && (
+            <div className="mt-2.5 text-xs text-red-700 font-semibold flex items-center gap-1.5 bg-red-50 border border-red-200 px-3 py-2 rounded-lg">
+              <AlertCircle size={15} className="text-red-600 shrink-0" />
+              <span>{facilityNameError}</span>
+            </div>
+          )}
+
+          <p className="text-[11px] text-slate-400 mt-2">
+            ※ 上の「施設名を保存」または下部の『設定を保存』ボタンを押すと施設データベースに即時永続保存され、ヘッダー・一覧表・個人履歴・CSV出力等へリアルタイム反映されます。
           </p>
         </div>
       </div>
@@ -629,7 +787,7 @@ const ResidentMaster: React.FC<ResidentMasterProps> = ({
       {saveSuccess && (
         <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-3.5 rounded-xl flex items-center gap-2.5 text-sm font-semibold shadow-sm">
           <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
-          <span>施設名称「{facilityName}」、バイタル警告閾値、名簿設定をデータベースに保存しました。</span>
+          <span>施設名称「{localFacilityName.trim() || facilityName}」、バイタル警告閾値、名簿設定をデータベースに保存しました。</span>
         </div>
       )}
 

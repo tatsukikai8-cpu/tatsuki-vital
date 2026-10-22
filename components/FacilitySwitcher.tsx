@@ -118,9 +118,6 @@ export const FacilitySwitcher: React.FC<FacilitySwitcherProps> = ({
                         </span>
                       )}
                     </div>
-                    {facility.description && (
-                      <p className="text-[10px] text-slate-400 mt-0.5 truncate">{facility.description}</p>
-                    )}
                     <span className="text-[9px] font-mono text-slate-400 block mt-0.5">ID: {facility.id}</span>
                   </div>
                   {isSelected ? (

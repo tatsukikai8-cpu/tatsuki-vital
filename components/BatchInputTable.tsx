@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { THRESHOLDS, ERR_LIMITS, DAYS_JP, DEFAULT_THRESHOLDS } from '../constants';
 import { VitalRecord, Meal, Resident, VitalThresholds } from '../types';
 import { getTodayJstString } from '../lib/dateUtils';
@@ -18,7 +18,10 @@ import {
   ZoomIn,
   X,
   Trash2,
-  Sparkles
+  Sparkles,
+  ChevronLeft,
+  ChevronRight,
+  Check
 } from 'lucide-react';
 import { exportVitalRecordsToCSV } from '../lib/csvExport';
 import { uploadVitalImage, deleteVitalImage } from '../lib/imageUtils';
@@ -33,6 +36,14 @@ interface BatchInputTableProps {
   isReadOnly?: boolean;
 }
 
+interface ActiveInputState {
+  resId: string;
+  resName: string;
+  roomNumber?: string;
+  fieldKey: string;
+  fieldLabel: string;
+}
+
 const BatchInputTable: React.FC<BatchInputTableProps> = ({ 
   onSave, 
   residents, 
@@ -44,6 +55,11 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
   const effectiveThresholds = useMemo(() => thresholds || DEFAULT_THRESHOLDS, [thresholds]);
   const [date, setDate] = useState(getTodayJstString());
   const [isSaving, setIsSaving] = useState(false);
+
+  // スマートフォン・キーボード入力ナビゲーション用ステート & Ref
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const blurTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [activeInputInfo, setActiveInputInfo] = useState<ActiveInputState | null>(null);
 
   // 画像アップロード・拡大表示関連ステート
   const [uploadingResId, setUploadingResId] = useState<string | null>(null);
@@ -207,6 +223,125 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
       return next;
     });
   };
+
+  // 全ての有効な入力要素を取得
+  const getAllInputs = useCallback(() => {
+    if (!tableContainerRef.current) return [];
+    return Array.from(
+      tableContainerRef.current.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>(
+        'input[data-vitals-input="true"]:not([disabled]):not([readonly]), textarea[data-vitals-input="true"]:not([disabled]):not([readonly])'
+      )
+    );
+  }, []);
+
+  // 次の入力項目へフォーカス移動
+  const goToNextInput = useCallback(() => {
+    const inputs = getAllInputs();
+    if (inputs.length === 0) return;
+    const current = document.activeElement as HTMLInputElement | HTMLTextAreaElement;
+    const currentIndex = inputs.indexOf(current);
+    const nextIndex = currentIndex >= 0 && currentIndex < inputs.length - 1 ? currentIndex + 1 : 0;
+    const target = inputs[nextIndex];
+    if (target) {
+      target.focus();
+      if ('select' in target && typeof target.select === 'function') {
+        target.select();
+      }
+      target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  }, [getAllInputs]);
+
+  // 前の入力項目へフォーカス移動
+  const goToPrevInput = useCallback(() => {
+    const inputs = getAllInputs();
+    if (inputs.length === 0) return;
+    const current = document.activeElement as HTMLInputElement | HTMLTextAreaElement;
+    const currentIndex = inputs.indexOf(current);
+    const prevIndex = currentIndex > 0 ? currentIndex - 1 : inputs.length - 1;
+    const target = inputs[prevIndex];
+    if (target) {
+      target.focus();
+      if ('select' in target && typeof target.select === 'function') {
+        target.select();
+      }
+      target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  }, [getAllInputs]);
+
+  // フォーカス解除（キーボードを閉じる）
+  const closeActiveInput = useCallback(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    setActiveInputInfo(null);
+  }, []);
+
+  // キーボードのEnterキー（またはShift+Enter）での項目間自動送り
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    if (e.key === 'Enter') {
+      if (e.currentTarget.tagName === 'TEXTAREA' && e.shiftKey) {
+        return; // 備考欄のShift+Enterは改行
+      }
+      e.preventDefault();
+      if (e.shiftKey) {
+        goToPrevInput();
+      } else {
+        goToNextInput();
+      }
+    }
+  }, [goToNextInput, goToPrevInput]);
+
+  // フィールドフォーカス時の追跡ハンドラー
+  const handleFieldFocus = useCallback((
+    e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>,
+    res: Resident,
+    fieldKey: string,
+    fieldLabel: string
+  ) => {
+    if (isReadOnly) return;
+    if (blurTimeoutRef.current) {
+      clearTimeout(blurTimeoutRef.current);
+    }
+    e.target.select?.();
+    setActiveInputInfo({
+      resId: res.id,
+      resName: res.name,
+      roomNumber: res.roomNumber,
+      fieldKey,
+      fieldLabel
+    });
+  }, [isReadOnly]);
+
+  // フィールドブラー時のハンドラー
+  const handleFieldBlur = useCallback((resId: string) => {
+    triggerAutoSave(resId);
+    if (blurTimeoutRef.current) {
+      clearTimeout(blurTimeoutRef.current);
+    }
+    blurTimeoutRef.current = setTimeout(() => {
+      const active = document.activeElement;
+      if (!active || !active.hasAttribute('data-vitals-input')) {
+        setActiveInputInfo(null);
+      }
+    }, 200);
+  }, [triggerAutoSave]);
+
+  // ワンタップで数値を反映して次の項目へ送るクイック入力ヘルパー
+  const handleQuickApply = useCallback((val: string | number) => {
+    if (!activeInputInfo || isReadOnly) return;
+    const { resId, fieldKey } = activeInputInfo;
+
+    if (fieldKey.startsWith('meal')) {
+      const [mealTime, mealType] = fieldKey.split('-') as ['mealMorning' | 'mealNoon' | 'mealNight', 'main' | 'side'];
+      handleMealChange(resId, mealTime, mealType, Number(val));
+    } else {
+      handleChange(resId, fieldKey as keyof VitalRecord, String(val), true);
+    }
+
+    setTimeout(() => {
+      goToNextInput();
+    }, 60);
+  }, [activeInputInfo, isReadOnly, handleMealChange, handleChange, goToNextInput]);
 
   /**
    * 画像のフロントエンド自動リサイズ・圧縮および Firebase Storage へのアップロード
@@ -477,7 +612,12 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
         <span className="text-blue-600 text-[10px]">👉 横スクロールで全項目入力</span>
       </div>
 
-      <div className="mobile-sticky-table-container max-h-[calc(100dvh-220px)] min-h-[380px] rounded-xl shadow-sm border border-slate-200 bg-white relative w-full">
+      <div 
+        ref={tableContainerRef}
+        className={`mobile-sticky-table-container max-h-[calc(100dvh-220px)] min-h-[380px] rounded-xl shadow-sm border border-slate-200 bg-white relative w-full transition-all ${
+          activeInputInfo ? 'pb-28' : ''
+        }`}
+      >
         <table className="min-w-max w-full divide-y divide-slate-200 text-sm border-separate border-spacing-0">
           <thead className="bg-slate-50 sticky top-0 z-30 shadow-[0_1px_2px_rgba(0,0,0,0.06)]">
             <tr>
@@ -503,11 +643,23 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
               const prev = prevDataMap[res.id];
               const isAbnormalResident = abnormalStats.abnormalResidentIds.has(res.id);
               const isUploadingThis = uploadingResId === res.id;
+              const isRowActive = activeInputInfo?.resId === res.id;
 
               return (
-                <tr key={res.id} className={`group hover:bg-slate-50 transition-colors ${row.isAbsent ? 'bg-slate-100 opacity-60' : ''}`}>
+                <tr 
+                  key={res.id} 
+                  className={`group transition-colors ${
+                    row.isAbsent ? 'bg-slate-100 opacity-60' : isRowActive ? 'bg-blue-50/50' : 'hover:bg-slate-50'
+                  }`}
+                >
                   <td className={`px-1.5 sm:px-2 py-1.5 sm:py-2.5 font-medium text-slate-800 sticky left-0 z-20 border-r border-slate-200 shadow-[2px_0_4px_rgba(0,0,0,0.08)] ${
-                    row.isAbsent ? 'bg-slate-100' : isAbnormalResident ? 'bg-red-50 hover:bg-red-100' : 'bg-white hover:bg-slate-50'
+                    row.isAbsent 
+                      ? 'bg-slate-100' 
+                      : isRowActive
+                        ? 'bg-blue-50 border-r-blue-400'
+                        : isAbnormalResident 
+                          ? 'bg-red-50 hover:bg-red-100' 
+                          : 'bg-white hover:bg-slate-50'
                   } w-[84px] sm:w-[94px] min-w-[80px] max-w-[94px]`}>
                     <div className="flex flex-col min-w-0">
                       <div className="flex items-center gap-0.5 mb-0.5">
@@ -519,10 +671,13 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                             異常
                           </span>
                         )}
+                        {isRowActive && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-ping ml-auto shrink-0" title="入力中"></span>
+                        )}
                       </div>
                       <span 
                         className={`text-[12px] sm:text-xs font-bold leading-tight tracking-tight break-all line-clamp-2 ${
-                          isAbnormalResident ? 'text-red-950 font-black' : 'text-slate-800'
+                          isAbnormalResident ? 'text-red-950 font-black' : isRowActive ? 'text-blue-950 font-bold' : 'text-slate-800'
                         }`} 
                         title={res.name}
                       >
@@ -548,6 +703,10 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                       <input
                         type="text" 
                         inputMode="decimal" 
+                        enterKeyHint="next"
+                        data-vitals-input="true"
+                        data-res-id={res.id}
+                        data-field-key="temperature"
                         disabled={isReadOnly || row.isAbsent}
                         readOnly={isReadOnly}
                         placeholder={isReadOnly ? '-' : '365'}
@@ -556,8 +715,9 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                         }${getStatusClass('temperature', row.temperature || '')}`}
                         value={row.temperature || ''}
                         onChange={(e) => handleChange(res.id, 'temperature', e.target.value)}
-                        onBlur={() => triggerAutoSave(res.id)}
-                        onFocus={(e) => !isReadOnly && e.target.select()}
+                        onBlur={() => handleFieldBlur(res.id)}
+                        onFocus={(e) => handleFieldFocus(e, res, 'temperature', '体温')}
+                        onKeyDown={handleKeyDown}
                       />
                       <span className="absolute bottom-0 left-0 right-0 text-[10px] text-center text-slate-400 truncate">前回:{prev?.temperature || '-'}</span>
                     </div>
@@ -568,6 +728,10 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                         type="text" 
                         inputMode="numeric" 
                         pattern="[0-9]*"
+                        enterKeyHint="next"
+                        data-vitals-input="true"
+                        data-res-id={res.id}
+                        data-field-key="pulse"
                         disabled={isReadOnly || row.isAbsent}
                         readOnly={isReadOnly}
                         placeholder={isReadOnly ? '-' : ''}
@@ -576,8 +740,9 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                         }${getStatusClass('pulse', row.pulse || '')}`}
                         value={row.pulse || ''}
                         onChange={(e) => handleChange(res.id, 'pulse', e.target.value)}
-                        onBlur={() => triggerAutoSave(res.id)}
-                        onFocus={(e) => !isReadOnly && e.target.select()}
+                        onBlur={() => handleFieldBlur(res.id)}
+                        onFocus={(e) => handleFieldFocus(e, res, 'pulse', '脈拍')}
+                        onKeyDown={handleKeyDown}
                       />
                       <span className="absolute bottom-0 left-0 right-0 text-[10px] text-center text-slate-400 truncate">前回:{prev?.pulse || '-'}</span>
                     </div>
@@ -589,6 +754,10 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                           type="text" 
                           inputMode="numeric" 
                           pattern="[0-9]*"
+                          enterKeyHint="next"
+                          data-vitals-input="true"
+                          data-res-id={res.id}
+                          data-field-key="systolic"
                           disabled={isReadOnly || row.isAbsent}
                           readOnly={isReadOnly}
                           placeholder={isReadOnly ? '-' : ''}
@@ -597,14 +766,19 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                           }${getStatusClass('systolic', row.systolic || '')}`}
                           value={row.systolic || ''}
                           onChange={(e) => handleChange(res.id, 'systolic', e.target.value)}
-                          onBlur={() => triggerAutoSave(res.id)}
-                          onFocus={(e) => !isReadOnly && e.target.select()}
+                          onBlur={() => handleFieldBlur(res.id)}
+                          onFocus={(e) => handleFieldFocus(e, res, 'systolic', '血圧(上)')}
+                          onKeyDown={handleKeyDown}
                         />
                         <span className="text-slate-400 font-bold">/</span>
                         <input
                           type="text" 
                           inputMode="numeric" 
                           pattern="[0-9]*"
+                          enterKeyHint="next"
+                          data-vitals-input="true"
+                          data-res-id={res.id}
+                          data-field-key="diastolic"
                           disabled={isReadOnly || row.isAbsent}
                           readOnly={isReadOnly}
                           placeholder={isReadOnly ? '-' : ''}
@@ -613,8 +787,9 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                           }${getStatusClass('diastolic', row.diastolic || '')}`}
                           value={row.diastolic || ''}
                           onChange={(e) => handleChange(res.id, 'diastolic', e.target.value)}
-                          onBlur={() => triggerAutoSave(res.id)}
-                          onFocus={(e) => !isReadOnly && e.target.select()}
+                          onBlur={() => handleFieldBlur(res.id)}
+                          onFocus={(e) => handleFieldFocus(e, res, 'diastolic', '血圧(下)')}
+                          onKeyDown={handleKeyDown}
                         />
                       </div>
                       <span className="absolute bottom-0 left-0 right-0 text-[10px] text-center text-slate-400 truncate">前回:{prev ? `${prev.systolic}/${prev.diastolic}` : '-'}</span>
@@ -626,6 +801,10 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                         type="text" 
                         inputMode="numeric" 
                         pattern="[0-9]*"
+                        enterKeyHint="next"
+                        data-vitals-input="true"
+                        data-res-id={res.id}
+                        data-field-key="spo2"
                         disabled={isReadOnly || row.isAbsent}
                         readOnly={isReadOnly}
                         placeholder={isReadOnly ? '-' : ''}
@@ -634,8 +813,9 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                         }${getStatusClass('spo2', row.spo2 || '')}`}
                         value={row.spo2 || ''}
                         onChange={(e) => handleChange(res.id, 'spo2', e.target.value)}
-                        onBlur={() => triggerAutoSave(res.id)}
-                        onFocus={(e) => !isReadOnly && e.target.select()}
+                        onBlur={() => handleFieldBlur(res.id)}
+                        onFocus={(e) => handleFieldFocus(e, res, 'spo2', 'SpO₂')}
+                        onKeyDown={handleKeyDown}
                       />
                       <span className="absolute bottom-0 left-0 right-0 text-[10px] text-center text-slate-400 truncate">前回:{prev?.spo2 || '-'}</span>
                     </div>
@@ -656,6 +836,10 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                                   type="text" 
                                   inputMode="numeric" 
                                   pattern="[0-9]*"
+                                  enterKeyHint="next"
+                                  data-vitals-input="true"
+                                  data-res-id={res.id}
+                                  data-field-key={`${time}-main`}
                                   disabled={isReadOnly || row.isAbsent} 
                                   readOnly={isReadOnly}
                                   title={`${label} 主食 (0-10)`}
@@ -667,7 +851,9 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                                     const val = parseInt(e.target.value, 10);
                                     handleMealChange(res.id, time, 'main', isNaN(val) ? 0 : Math.min(10, Math.max(0, val)));
                                   }} 
-                                  onFocus={(e) => !isReadOnly && e.target.select()}
+                                  onBlur={() => handleFieldBlur(res.id)}
+                                  onFocus={(e) => handleFieldFocus(e, res, `${time}-main`, `${label}主`)}
+                                  onKeyDown={handleKeyDown}
                                 />
                               </div>
                               {/* 副食 */}
@@ -677,6 +863,10 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                                   type="text" 
                                   inputMode="numeric" 
                                   pattern="[0-9]*"
+                                  enterKeyHint="next"
+                                  data-vitals-input="true"
+                                  data-res-id={res.id}
+                                  data-field-key={`${time}-side`}
                                   disabled={isReadOnly || row.isAbsent} 
                                   readOnly={isReadOnly}
                                   title={`${label} 副食 (0-10)`}
@@ -688,7 +878,9 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                                     const val = parseInt(e.target.value, 10);
                                     handleMealChange(res.id, time, 'side', isNaN(val) ? 0 : Math.min(10, Math.max(0, val)));
                                   }} 
-                                  onFocus={(e) => !isReadOnly && e.target.select()}
+                                  onBlur={() => handleFieldBlur(res.id)}
+                                  onFocus={(e) => handleFieldFocus(e, res, `${time}-side`, `${label}副`)}
+                                  onKeyDown={handleKeyDown}
                                 />
                               </div>
                             </div>
@@ -702,6 +894,10 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                       type="text" 
                       inputMode="numeric" 
                       pattern="[0-9]*"
+                      enterKeyHint="next"
+                      data-vitals-input="true"
+                      data-res-id={res.id}
+                      data-field-key="bowelCount"
                       disabled={isReadOnly || row.isAbsent} 
                       readOnly={isReadOnly}
                       className={`w-full text-center border rounded py-1.5 font-bold text-[16px] sm:text-sm touch-manipulation focus:ring-2 focus:ring-blue-500 outline-none transition-all ${
@@ -709,8 +905,9 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                       }`} 
                       value={row.bowelCount || '0'} 
                       onChange={(e) => handleChange(res.id, 'bowelCount', e.target.value)} 
-                      onBlur={() => triggerAutoSave(res.id)}
-                      onFocus={(e) => !isReadOnly && e.target.select()}
+                      onBlur={() => handleFieldBlur(res.id)}
+                      onFocus={(e) => handleFieldFocus(e, res, 'bowelCount', '排便')}
+                      onKeyDown={handleKeyDown}
                     />
                   </td>
                   <td className="px-3 py-3">
@@ -720,12 +917,18 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
                         disabled={isReadOnly || row.isAbsent} 
                         readOnly={isReadOnly}
                         rows={2}
+                        data-vitals-input="true"
+                        data-res-id={res.id}
+                        data-field-key="note"
+                        enterKeyHint="next"
                         className={`flex-1 min-w-[170px] border rounded py-1 px-2 text-[16px] sm:text-xs focus:ring-2 focus:ring-blue-500 outline-none resize-none leading-tight touch-manipulation ${
                           isReadOnly ? 'bg-slate-100/70 cursor-not-allowed text-slate-600 border-slate-200' : ''
                         }`} 
                         value={row.note || ''} 
                         onChange={(e) => handleChange(res.id, 'note', e.target.value)} 
-                        onBlur={() => triggerAutoSave(res.id)}
+                        onBlur={() => handleFieldBlur(res.id)}
+                        onFocus={(e) => handleFieldFocus(e, res, 'note', '備考')}
+                        onKeyDown={handleKeyDown}
                         placeholder={isReadOnly ? '（閲覧のみ）' : '備考を入力...'} 
                       />
 
@@ -803,6 +1006,121 @@ const BatchInputTable: React.FC<BatchInputTableProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* スマホ・タブレット専用 入力アシストナビゲーションバー（iPhone Chrome等のテンキー入力で「次へ」「完了」を提供） */}
+      {activeInputInfo && !isReadOnly && (
+        <aside 
+          aria-label="入力ナビゲーションツールバー"
+          className="fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 text-white backdrop-blur-md border-t border-slate-700/80 px-3 pt-2.5 pb-[max(0.6rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(0,0,0,0.3)] animate-in slide-in-from-bottom duration-200 no-print"
+        >
+          <div className="max-w-4xl mx-auto flex flex-col gap-1.5">
+            {/* 上段: 現在選択中の利用者・項目・クイック入力チップ */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-[10px] font-mono text-blue-400 bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded shrink-0">
+                  #{activeInputInfo.roomNumber || '-'}
+                </span>
+                <span className="text-xs font-bold text-slate-100 truncate max-w-[120px] sm:max-w-none">
+                  {activeInputInfo.resName}
+                </span>
+                <span className="bg-blue-600 text-white text-[11px] font-bold px-2 py-0.5 rounded shadow-xs shrink-0">
+                  {activeInputInfo.fieldLabel}
+                </span>
+              </div>
+
+              {/* クイック入力チップ（食事や排便、体温の代表値をワンタップで反映して即座に次へ送る） */}
+              <div className="flex items-center gap-1 shrink-0 overflow-x-auto">
+                {activeInputInfo.fieldKey.startsWith('meal') && (
+                  <>
+                    <span className="text-[10px] text-slate-400 font-medium hidden xs:inline">即入力:</span>
+                    {[10, 8, 5, 0].map(num => (
+                      <button
+                        key={num}
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => handleQuickApply(num)}
+                        className="px-2 py-0.5 text-xs font-bold bg-slate-800 hover:bg-blue-700 active:bg-blue-600 text-slate-200 hover:text-white rounded border border-slate-700 touch-manipulation cursor-pointer"
+                        title={`${num}割`}
+                      >
+                        {num}
+                      </button>
+                    ))}
+                  </>
+                )}
+                {activeInputInfo.fieldKey === 'bowelCount' && (
+                  <>
+                    <span className="text-[10px] text-slate-400 font-medium hidden xs:inline">即入力:</span>
+                    {['0', '1', '2'].map(cnt => (
+                      <button
+                        key={cnt}
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => handleQuickApply(cnt)}
+                        className="px-2 py-0.5 text-xs font-bold bg-slate-800 hover:bg-blue-700 active:bg-blue-600 text-slate-200 hover:text-white rounded border border-slate-700 touch-manipulation cursor-pointer"
+                        title={`${cnt}回`}
+                      >
+                        {cnt}回
+                      </button>
+                    ))}
+                  </>
+                )}
+                {activeInputInfo.fieldKey === 'temperature' && (
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => handleQuickApply('36.5')}
+                    className="px-2 py-0.5 text-xs font-bold bg-slate-800 hover:bg-blue-700 active:bg-blue-600 text-slate-200 hover:text-white rounded border border-slate-700 touch-manipulation cursor-pointer"
+                    title="平熱 36.5℃"
+                  >
+                    36.5℃
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* 下段: ナビゲーション操作ボタン群 */}
+            <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-800">
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={goToPrevInput}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-200 text-xs font-bold rounded-lg border border-slate-700 flex items-center gap-1 touch-manipulation cursor-pointer active:scale-95 transition-transform"
+                  title="前の入力項目へ"
+                >
+                  <ChevronLeft size={16} />
+                  <span>前へ</span>
+                </button>
+                <span className="text-[10px] text-slate-400 hidden sm:inline">Enterキーでも移動可能</span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={closeActiveInput}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-300 text-xs font-medium rounded-lg flex items-center gap-1 touch-manipulation cursor-pointer transition-colors"
+                  title="入力を完了してキーボードを閉じる"
+                >
+                  <Check size={14} className="text-emerald-400" />
+                  <span>完了</span>
+                </button>
+
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={goToNextInput}
+                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white text-xs font-bold rounded-lg shadow-md flex items-center gap-1.5 touch-manipulation cursor-pointer active:scale-95 transition-all ring-2 ring-blue-400/40"
+                  title="次の入力項目へ (Enter)"
+                >
+                  <span>次へ</span>
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </aside>
+      )}
 
       {/* ガイドエリア */}
       <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 flex flex-col sm:flex-row gap-3 justify-between items-start sm:items-center no-print">
