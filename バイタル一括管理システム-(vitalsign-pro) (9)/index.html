@@ -1,0 +1,73 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>バイタル一括管理システム</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', 'Noto Sans JP', sans-serif; }
+        
+        @page {
+            size: A4 portrait;
+            margin: 10mm 8mm;
+        }
+
+        @media print {
+            /* 印刷時に不要な要素を非表示 */
+            .no-print { display: none !important; }
+            .print-only { display: block !important; }
+            
+            /* スクロールコンテナの制限を解除し、全内容を出力可能にする */
+            html, body, #root, main {
+                height: auto !important;
+                overflow: visible !important;
+                position: static !important;
+                background: white !important;
+            }
+            
+            /* 余白とサイズの調整 */
+            main {
+                padding: 0 !important;
+                margin: 0 !important;
+            }
+            
+            table { 
+                font-size: 9px; 
+                width: 100% !important;
+                border-collapse: collapse !important;
+            }
+            
+            /* 改ページ制御 */
+            tr { page-break-inside: avoid !important; break-inside: avoid !important; }
+            thead { display: table-header-group !important; }
+
+            .resident-sheet {
+                page-break-after: always !important;
+                break-after: page !important;
+                page-break-inside: avoid !important;
+                break-inside: avoid !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                border: none !important;
+                box-shadow: none !important;
+                min-height: auto !important;
+            }
+
+            .resident-sheet:last-child {
+                page-break-after: auto !important;
+                break-after: auto !important;
+            }
+        }
+    </style>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body class="bg-slate-50 text-slate-900">
+    <div id="root"></div>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
