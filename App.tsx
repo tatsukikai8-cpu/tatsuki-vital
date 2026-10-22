@@ -7,6 +7,7 @@ import ResidentMaster from './components/ResidentMaster';
 import UserManagement from './components/UserManagement';
 import AuthScreen from './components/AuthScreen';
 import FacilitySwitcher from './components/FacilitySwitcher';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { 
   LayoutGrid, 
   Users, 
@@ -55,8 +56,13 @@ const App: React.FC = () => {
   const [records, setRecords] = useState<VitalRecord[]>([]);
   const [residents, setResidents] = useState<Resident[]>([]);
   
-  // マルチテナント・施設関連ステート
-  const [facilities, setFacilities] = useState<Facility[]>(DEFAULT_FACILITIES);
+  // マルチテナント・施設関連ステート（localStorageキャッシュを活用して即時表示＆初期化リセット防止）
+  const [facilities, setFacilities] = useState<Facility[]>(() => {
+    return DEFAULT_FACILITIES.map(f => {
+      const cached = localStorage.getItem(`vital_facility_name_${f.id}`);
+      return cached ? { ...f, name: cached } : f;
+    });
+  });
   const [allowedFacilityIds, setAllowedFacilityIds] = useState<string[]>(['facility-a', 'facility-b']);
   const [currentFacilityId, setCurrentFacilityId] = useState<string>(() => {
     return localStorage.getItem('vital_selected_facility_id') || 'facility-a';
@@ -82,12 +88,20 @@ const App: React.FC = () => {
 
   // 現在選択中の施設オブジェクト
   const currentFacility = useMemo(() => {
-    return facilities.find(f => f.id === currentFacilityId) ||
-           DEFAULT_FACILITIES.find(f => f.id === currentFacilityId) || {
-             id: currentFacilityId,
-             name: '陽光ケアホーム',
-             thresholds: DEFAULT_THRESHOLDS
-           };
+    const cachedName = localStorage.getItem(`vital_facility_name_${currentFacilityId}`);
+    const found = facilities.find(f => f.id === currentFacilityId) ||
+                  DEFAULT_FACILITIES.find(f => f.id === currentFacilityId);
+    if (found) {
+      if (cachedName && cachedName.trim() && cachedName !== found.name) {
+        return { ...found, name: cachedName.trim() };
+      }
+      return found;
+    }
+    return {
+      id: currentFacilityId,
+      name: cachedName || (currentFacilityId === 'facility-b' ? '施設 B' : '施設 A'),
+      thresholds: DEFAULT_THRESHOLDS
+    };
   }, [facilities, currentFacilityId]);
 
   // 現在選択中の施設の警告閾値
@@ -129,9 +143,84 @@ const App: React.FC = () => {
 
     const userEmail = loggedUser.email?.trim().toLowerCase() || '';
     const userUid = loggedUser.uid;
+    const isMasterAdmin = userEmail === ADMIN_BOOTSTRAP_EMAIL.toLowerCase();
+    const defaultFacilityIds = DEFAULT_FACILITIES.map(f => f.id);
 
     try {
-      // 1. まず users/{uid} を直接確認
+      // 1. マスター管理者（tatsukikai8@tatsukikai.com）の自動ブートストラップ＆無条件認可
+      // 未登録・施設未割り当て・初回来訪であっても自動的に管理者（ADMIN）として初期施設を割り当ててログインさせる
+      if (isMasterAdmin) {
+        let adminFacilities = [...defaultFacilityIds];
+        let displayName = loggedUser.displayName || '管理者';
+
+        try {
+          const userDocRef = doc(db, 'users', userUid);
+          const userSnap = await getDoc(userDocRef);
+
+          if (userSnap.exists()) {
+            const data = userSnap.data();
+            displayName = loggedUser.displayName || data.displayName || displayName;
+            if (Array.isArray(data.allowedFacilities) && data.allowedFacilities.length > 0) {
+              // 既存の施設があればデフォルト施設と合体して保持
+              adminFacilities = Array.from(new Set([...defaultFacilityIds, ...data.allowedFacilities]));
+            }
+          } else {
+            // UIDドキュメントがない場合、事前登録（email照合）ドキュメントがあるか確認
+            const qEmail = query(collection(db, 'users'), where('email', '==', userEmail));
+            const querySnap = await getDocs(qEmail);
+            if (!querySnap.empty) {
+              const matchedDoc = querySnap.docs[0];
+              const data = matchedDoc.data();
+              displayName = loggedUser.displayName || data.displayName || displayName;
+              if (Array.isArray(data.allowedFacilities) && data.allowedFacilities.length > 0) {
+                adminFacilities = Array.from(new Set([...defaultFacilityIds, ...data.allowedFacilities]));
+              }
+              if (matchedDoc.id !== userUid) {
+                await deleteDoc(doc(db, 'users', matchedDoc.id)).catch(() => {});
+              }
+            }
+          }
+
+          // Firestore の users/{uid} を確実に role: 'admin' かつ 初期施設割り当て済みに保存/更新
+          const masterProfileData: UserProfile = {
+            uid: userUid,
+            email: userEmail,
+            displayName,
+            role: 'admin',
+            allowedFacilities: adminFacilities,
+            updatedAt: new Date().toISOString()
+          };
+          await setDoc(userDocRef, masterProfileData, { merge: true });
+        } catch (dbErr) {
+          console.warn("[AuthGuard] Master admin Firestore sync warning:", dbErr);
+          // DBアクセスエラーがあってもマスター管理者は絶対にログイン遮断しない
+        }
+
+        const masterAdminProfile: UserProfile = {
+          uid: userUid,
+          email: userEmail,
+          displayName,
+          role: 'admin',
+          allowedFacilities: adminFacilities
+        };
+
+        setCurrentUserProfile(masterAdminProfile);
+        setAllowedFacilityIds(masterAdminProfile.allowedFacilities);
+        const savedId = localStorage.getItem('vital_selected_facility_id');
+        if (savedId && masterAdminProfile.allowedFacilities.includes(savedId)) {
+          setCurrentFacilityId(savedId);
+        } else {
+          setCurrentFacilityId(masterAdminProfile.allowedFacilities[0] || 'facility-a');
+          localStorage.setItem('vital_selected_facility_id', masterAdminProfile.allowedFacilities[0] || 'facility-a');
+        }
+
+        setUser(loggedUser);
+        setIsAuthorized(true);
+        setAuthErrorMessage(null);
+        return;
+      }
+
+      // 2. 一般ユーザーの場合の認可判定フロー
       const userDocRef = doc(db, 'users', userUid);
       const userSnap = await getDoc(userDocRef);
 
@@ -147,7 +236,7 @@ const App: React.FC = () => {
           allowedFacilities: Array.isArray(data.allowedFacilities) ? data.allowedFacilities : []
         };
       } else {
-        // 2. UIDドキュメントがない場合、管理者による事前登録（email照合）を検索
+        // UIDドキュメントがない場合、管理者による事前登録（email照合）を検索
         const qEmail = query(
           collection(db, 'users'),
           where('email', '==', userEmail)
@@ -179,19 +268,6 @@ const App: React.FC = () => {
           if (matchedDoc.id !== userUid && matchedDoc.id.startsWith('invited_')) {
             await deleteDoc(doc(db, 'users', matchedDoc.id)).catch(() => {});
           }
-        } else if (userEmail === ADMIN_BOOTSTRAP_EMAIL.toLowerCase()) {
-          // 初期管理者（tatsukikai8@tatsukikai.com）の自動ブートストラップ
-          const initialAdminProfile: UserProfile = {
-            uid: userUid,
-            email: userEmail,
-            displayName: loggedUser.displayName || 'システム管理者',
-            role: 'admin',
-            allowedFacilities: DEFAULT_FACILITIES.map(f => f.id),
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-          await setDoc(userDocRef, initialAdminProfile);
-          foundProfile = initialAdminProfile;
         }
       }
 
@@ -231,6 +307,23 @@ const App: React.FC = () => {
       }
     } catch (err) {
       console.error("[AuthGuard] Error verifying authorization:", err);
+      if (isMasterAdmin) {
+        // 例外発生時でもマスター管理者は絶対に遮断しない
+        const fallbackProfile: UserProfile = {
+          uid: userUid,
+          email: userEmail,
+          displayName: loggedUser.displayName || '管理者',
+          role: 'admin',
+          allowedFacilities: defaultFacilityIds
+        };
+        setCurrentUserProfile(fallbackProfile);
+        setAllowedFacilityIds(fallbackProfile.allowedFacilities);
+        setCurrentFacilityId(defaultFacilityIds[0] || 'facility-a');
+        setUser(loggedUser);
+        setIsAuthorized(true);
+        setAuthErrorMessage(null);
+        return;
+      }
       setAuthErrorMessage('このアカウントにはアクセス権限が付与されていません。管理者にお問い合わせください。');
       setIsAuthorized(false);
       setUser(null);
@@ -288,10 +381,21 @@ const App: React.FC = () => {
     const unsubscribeUser = onSnapshot(userDocRef, async (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        const facilitiesList = Array.isArray(data.allowedFacilities) ? data.allowedFacilities : [];
-        
-        // 途中で管理者に全施設を解除された場合 -> 即時ログアウト
-        if (facilitiesList.length === 0) {
+        let facilitiesList = Array.isArray(data.allowedFacilities) ? data.allowedFacilities : [];
+        const isMaster = (user.email?.toLowerCase() === ADMIN_BOOTSTRAP_EMAIL.toLowerCase());
+
+        // マスター管理者の場合は施設が0件にならないよう保護
+        if (isMaster) {
+          if (facilitiesList.length === 0) {
+            facilitiesList = DEFAULT_FACILITIES.map(f => f.id);
+            setDoc(userDocRef, {
+              role: 'admin',
+              allowedFacilities: facilitiesList,
+              updatedAt: new Date().toISOString()
+            }, { merge: true }).catch(() => {});
+          }
+        } else if (facilitiesList.length === 0) {
+          // 途中で管理者に全施設を解除された場合 -> 即時ログアウト
           console.warn("[AuthGuard] Access revoked in real-time.");
           setAuthErrorMessage('このアカウントにはアクセス権限が付与されていません。管理者にお問い合わせください。');
           setIsAuthorized(false);
@@ -305,28 +409,45 @@ const App: React.FC = () => {
         setCurrentUserProfile(prev => prev ? {
           ...prev,
           displayName: data.displayName || prev.displayName,
-          role: normalizeRole(data.role, user.email || prev.email),
+          role: isMaster ? 'admin' : normalizeRole(data.role, user.email || prev.email),
           allowedFacilities: facilitiesList
         } : null);
 
         // 現在選択中の施設が許可リストに含まれていない場合は先頭施設に変更
-        if (!facilitiesList.includes(currentFacilityId)) {
-          setCurrentFacilityId(facilitiesList[0]);
-          localStorage.setItem('vital_selected_facility_id', facilitiesList[0]);
-        }
+        setCurrentFacilityId(prevId => {
+          if (!facilitiesList.includes(prevId)) {
+            const nextId = facilitiesList[0] || 'facility-a';
+            localStorage.setItem('vital_selected_facility_id', nextId);
+            return nextId;
+          }
+          return prevId;
+        });
       }
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
+      console.warn(`[Firestore] User sync notice (${user.uid}):`, error);
     });
 
-    // 施設マスタの初期登録
+    // 施設マスタの初期確認（DBに未登録の場合のみ初期シードを行い、登録済みの施設名・閾値は絶対に上書きしない）
     const ensureFacilities = async () => {
+      // 閲覧専用アカウントの場合はシード処理をスキップ
+      if (isViewer) return;
       try {
         for (const f of DEFAULT_FACILITIES) {
-          await setDoc(doc(db, 'facilities', f.id), f, { merge: true });
+          const fDocRef = doc(db, 'facilities', f.id);
+          const snap = await getDoc(fDocRef);
+          if (snap.exists()) {
+            const data = snap.data();
+            if (data?.name && typeof data.name === 'string') {
+              localStorage.setItem(`vital_facility_name_${f.id}`, data.name);
+            }
+          } else {
+            const cachedName = localStorage.getItem(`vital_facility_name_${f.id}`);
+            const seedData = cachedName ? { ...f, name: cachedName } : f;
+            await setDoc(fDocRef, seedData);
+          }
         }
       } catch (err) {
-        console.error("Error initializing facilities in DB:", err);
+        console.warn("Notice: Facility DB check:", err);
       }
     };
     ensureFacilities();
@@ -334,7 +455,7 @@ const App: React.FC = () => {
     return () => {
       unsubscribeUser();
     };
-  }, [user, isAuthorized, currentFacilityId]);
+  }, [user, isAuthorized, isViewer]);
 
   // 2. 許可された各施設マスタのリアルタイム同期
   useEffect(() => {
@@ -345,6 +466,9 @@ const App: React.FC = () => {
       const unsub = onSnapshot(doc(db, 'facilities', facilityId), (snap) => {
         if (snap.exists()) {
           const fData = snap.data() as Facility;
+          if (fData.name) {
+            localStorage.setItem(`vital_facility_name_${facilityId}`, fData.name);
+          }
           setFacilities(prev => {
             const index = prev.findIndex(item => item.id === facilityId);
             if (index >= 0) {
@@ -388,15 +512,14 @@ const App: React.FC = () => {
         setRecords(recordsData);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, `vital_records (facilityId: ${currentFacilityId})`);
+        console.warn(`[Firestore] Sync records notice (${currentFacilityId}):`, error);
       }
     );
 
-    // 施設別利用者マスタのリアルタイム同期 (where句で施設フィルタ)
+    // 施設別利用者マスタのリアルタイム同期 (複合インデックス不要にするためFirestore側ではorderByせずJS側でソート)
     const qResidents = query(
       collection(db, 'residents'),
-      where('facilityId', '==', currentFacilityId),
-      orderBy('order', 'asc')
+      where('facilityId', '==', currentFacilityId)
     );
     const unsubscribeResidents = onSnapshot(
       qResidents,
@@ -405,24 +528,29 @@ const App: React.FC = () => {
         snapshot.forEach((docSnap) => {
           residentsData.push({ id: docSnap.id, ...docSnap.data() } as Resident);
         });
+        // 順序(order)で昇順ソート
+        residentsData.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
         if (residentsData.length > 0) {
           setResidents(residentsData);
         } else {
-          // 該当施設の利用者データが空の場合は初期利用者をシード
+          // 該当施設の利用者データが空の場合は初期利用者をシード（編集権限がある場合のみ）
           const initial = getInitialResidentsForFacility(currentFacilityId);
           setResidents(initial);
-          try {
-            const batchPromises = initial.map((res, index) => 
-              setDoc(doc(db, 'residents', res.id), { ...res, order: index })
-            );
-            await Promise.all(batchPromises);
-          } catch (err) {
-            console.error("Error seeding initial residents for facility:", err);
+          if (!isViewer) {
+            try {
+              const batchPromises = initial.map((res, index) => 
+                setDoc(doc(db, 'residents', res.id), { ...res, order: index })
+              );
+              await Promise.all(batchPromises);
+            } catch (err) {
+              console.warn("Notice: Seeding initial residents:", err);
+            }
           }
         }
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, `residents (facilityId: ${currentFacilityId})`);
+        console.warn(`[Firestore] Sync residents notice (${currentFacilityId}):`, error);
       }
     );
 
@@ -430,7 +558,7 @@ const App: React.FC = () => {
       unsubscribeRecords();
       unsubscribeResidents();
     };
-  }, [user, isAuthorized, currentFacilityId]);
+  }, [user, isAuthorized, currentFacilityId, isViewer]);
 
   /**
    * レコードを保存または更新する（必ずfacilityIdを付与）
@@ -496,19 +624,44 @@ const App: React.FC = () => {
    * 施設名を更新する
    */
   const updateFacilityName = async (newName: string) => {
-    if (!user || !isAuthorized || !currentFacilityId) return;
+    if (!user || !isAuthorized || !currentFacilityId) {
+      throw new Error("認証情報または対象施設IDが確認できませんでした。");
+    }
     if (isViewer) {
-      alert('閲覧専用（viewer）アカウントのため、施設名の更新は行えません。');
-      return;
+      throw new Error("閲覧専用アカウントのため施設名称は変更できません。");
+    }
+    const trimmed = newName.trim();
+    if (!trimmed) {
+      throw new Error("施設名称を入力してください。");
     }
     try {
+      // 1. Firestoreへ永続化（先にDB保存を確認）
       await setDoc(doc(db, 'facilities', currentFacilityId), {
         id: currentFacilityId,
-        name: newName
+        name: trimmed,
+        updatedAt: new Date().toISOString()
       }, { merge: true });
-      setFacilities(prev => prev.map(f => f.id === currentFacilityId ? { ...f, name: newName } : f));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `facilities/${currentFacilityId}`);
+
+      // 2. ローカルストレージにキャッシュ保存（オフライン時や再読込時用）
+      localStorage.setItem(`vital_facility_name_${currentFacilityId}`, trimmed);
+
+      // 3. Reactステートを更新
+      setFacilities(prev => {
+        const index = prev.findIndex(item => item.id === currentFacilityId);
+        if (index >= 0) {
+          const updated = [...prev];
+          updated[index] = { ...updated[index], name: trimmed };
+          return updated;
+        } else {
+          return [...prev, { id: currentFacilityId, name: trimmed, thresholds: currentThresholds }];
+        }
+      });
+
+      setToastMessage(`施設名称を「${trimmed}」に更新・保存しました`);
+      setTimeout(() => setToastMessage(null), 3500);
+    } catch (error: any) {
+      console.error("Facility name save error:", error);
+      throw new Error(error?.message || "施設名称の保存に失敗しました。");
     }
   };
 
@@ -518,8 +671,7 @@ const App: React.FC = () => {
   const updateFacilityThresholds = async (newThresholds: VitalThresholds) => {
     if (!user || !isAuthorized || !currentFacilityId) return;
     if (isViewer) {
-      alert('閲覧専用（viewer）アカウントのため、警告閾値の更新は行えません。');
-      return;
+      throw new Error("閲覧専用アカウントのため警告閾値は変更できません。");
     }
     try {
       await setDoc(doc(db, 'facilities', currentFacilityId), {
@@ -527,9 +679,11 @@ const App: React.FC = () => {
         thresholds: newThresholds
       }, { merge: true });
       setFacilities(prev => prev.map(f => f.id === currentFacilityId ? { ...f, thresholds: newThresholds } : f));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `facilities/${currentFacilityId}/thresholds`);
-      throw error;
+      setToastMessage("警告閾値を更新・保存しました");
+      setTimeout(() => setToastMessage(null), 3500);
+    } catch (error: any) {
+      console.error("Facility thresholds save error:", error);
+      throw new Error(error?.message || "警告閾値の保存に失敗しました。");
     }
   };
 
@@ -652,6 +806,11 @@ const App: React.FC = () => {
               >
                 <Settings size={16} />
                 <span>マスタ</span>
+                {isViewer && (
+                  <span className="text-[9px] bg-slate-100 text-slate-600 border border-slate-200 px-1 py-0.2 rounded font-bold">
+                    閲覧
+                  </span>
+                )}
               </button>
 
               {/* 管理者専用: ユーザー管理タブ */}
@@ -762,7 +921,7 @@ const App: React.FC = () => {
               }`}
             >
               <Settings size={16} className="mb-1" />
-              マスタ
+              マスタ{isViewer ? '(閲覧)' : ''}
             </button>
             {isAdmin && (
               <button
@@ -782,50 +941,53 @@ const App: React.FC = () => {
 
       <main className="flex-1 overflow-y-auto overflow-x-hidden p-2 sm:p-4 lg:p-8 bg-slate-50/40 w-full max-w-full">
         <div className="max-w-7xl mx-auto h-full w-full">
-          {currentView === AppView.BATCH_INPUT && (
-            <BatchInputTable 
-              onSave={saveBatchRecords} 
-              residents={residents} 
-              records={records} 
-              facilityName={currentFacility.name}
-              thresholds={currentThresholds} 
-              isReadOnly={isViewer}
-            />
-          )}
-          {currentView === AppView.INDIVIDUAL_HISTORY && (
-            <IndividualHistory 
-              records={records} 
-              residents={residents} 
-              facilityName={currentFacility.name}
-              thresholds={currentThresholds} 
-            />
-          )}
-          {currentView === AppView.DASHBOARD && (
-            <Dashboard 
-              records={records} 
-              residents={residents} 
-              facilityName={currentFacility.name}
-              thresholds={currentThresholds} 
-            />
-          )}
-          {currentView === AppView.RESIDENT_MASTER && (
-            <ResidentMaster 
-              residents={residents} 
-              onUpdate={updateResidents} 
-              facilityName={currentFacility.name}
-              facilityId={currentFacilityId}
-              onFacilityNameUpdate={updateFacilityName}
-              thresholds={currentThresholds}
-              onThresholdsUpdate={updateFacilityThresholds}
-              isReadOnly={isViewer}
-            />
-          )}
-          {currentView === AppView.USER_MANAGEMENT && isAdmin && (
-            <UserManagement 
-              currentUserEmail={user.email}
-              facilities={facilities}
-            />
-          )}
+          <ErrorBoundary onReset={() => setCurrentView(AppView.BATCH_INPUT)}>
+            {currentView === AppView.BATCH_INPUT && (
+              <BatchInputTable 
+                onSave={saveBatchRecords} 
+                residents={residents} 
+                records={records} 
+                facilityName={currentFacility.name}
+                thresholds={currentThresholds} 
+                isReadOnly={isViewer}
+              />
+            )}
+            {currentView === AppView.INDIVIDUAL_HISTORY && (
+              <IndividualHistory 
+                records={records} 
+                residents={residents} 
+                facilityName={currentFacility.name}
+                thresholds={currentThresholds} 
+              />
+            )}
+            {currentView === AppView.DASHBOARD && (
+              <Dashboard 
+                records={records} 
+                residents={residents} 
+                facilityName={currentFacility.name}
+                thresholds={currentThresholds} 
+              />
+            )}
+            {currentView === AppView.RESIDENT_MASTER && (
+              <ResidentMaster 
+                residents={residents} 
+                onUpdate={updateResidents} 
+                facilityName={currentFacility.name}
+                facilityId={currentFacilityId}
+                onFacilityNameUpdate={updateFacilityName}
+                thresholds={currentThresholds}
+                onThresholdsUpdate={updateFacilityThresholds}
+                isReadOnly={isViewer}
+                onReturnToInput={() => setCurrentView(AppView.BATCH_INPUT)}
+              />
+            )}
+            {currentView === AppView.USER_MANAGEMENT && isAdmin && (
+              <UserManagement 
+                currentUserEmail={user.email}
+                facilities={facilities}
+              />
+            )}
+          </ErrorBoundary>
         </div>
       </main>
 
