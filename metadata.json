@@ -1,5 +1,5 @@
 {
-  "name": "Remix バイタル一括管理システム (VitalSign Pro)",
-  "description": "介護施設向けのバイタルデータ一括入力・管理ツール。30名分のデータを一度に入力し、Google Sheetsと連携して個人別の履歴管理や異常値検知を行います。",
+  "name": "VitalSign Pro (バイタル一括管理システム)",
+  "description": "バイタルデータ一括入力・管理ツール。複数名分のデータを一度に入力し、個人別の履歴管理や異常値検知を行います。",
   "requestFramePermissions": []
 }

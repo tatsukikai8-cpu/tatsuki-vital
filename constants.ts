@@ -59,21 +59,19 @@ export const DEFAULT_THRESHOLDS: VitalThresholds = {
 export const DEFAULT_FACILITIES: Facility[] = [
   { 
     id: 'facility-a', 
-    name: '陽光ケアホーム (本館)', 
-    description: '特別養護老人ホーム',
+    name: '施設 A', 
     thresholds: { ...DEFAULT_THRESHOLDS }
   },
   { 
     id: 'facility-b', 
-    name: '陽光デイサービス (別館)', 
-    description: '通所介護・デイサービス',
+    name: '施設 B', 
     thresholds: { ...DEFAULT_THRESHOLDS }
   }
 ];
 
 export const getInitialResidentsForFacility = (facilityId: string): Resident[] => {
   const isFacilityB = facilityId === 'facility-b';
-  const prefix = isFacilityB ? 'デイ利用者' : '入所者';
+  const prefix = '利用者';
   const count = isFacilityB ? 15 : 29;
   return Array.from({ length: count }, (_, i) => ({
     id: `res-${facilityId}-${i + 1}`,

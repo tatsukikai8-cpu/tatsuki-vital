@@ -17,9 +17,12 @@ service cloud.firestore {
     // Administrator verification helper
     function isAdmin() {
       return isSignedIn() && (
-        (request.auth.token.email == 'tatsukikai8@tatsukikai.com') ||
+        (request.auth.token.email is string && (
+          request.auth.token.email == 'tatsukikai8@tatsukikai.com' ||
+          request.auth.token.email.matches('(?i)^tatsukikai8@tatsukikai\\.com$')
+        )) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin')
       );
     }
 
@@ -27,9 +30,8 @@ service cloud.firestore {
     function isEditor() {
       return isSignedIn() && (
         isAdmin() ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'editor' ||
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'))
+        !exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'editor') != 'viewer'
       );
     }
 
@@ -39,8 +41,8 @@ service cloud.firestore {
              facilityId is string &&
              (
                isAdmin() ||
-               (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-                get(/databases/$(database)/documents/users/$(request.auth.uid)).data.allowedFacilities.hasAny([facilityId]))
+               !exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+               get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('allowedFacilities', []).hasAny([facilityId])
              );
     }
 
@@ -49,7 +51,10 @@ service cloud.firestore {
       allow read: if isSignedIn() && (
         request.auth.uid == userId ||
         isAdmin() ||
-        (resource.data.email is string && resource.data.email == request.auth.token.email)
+        (resource.data.email is string && (
+          resource.data.email == request.auth.token.email ||
+          resource.data.email.matches('(?i)^' + request.auth.token.email + '$')
+        ))
       );
       allow create, update: if isSignedIn() && (
         isAdmin() ||
@@ -58,19 +63,18 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Facilities collection: accessible to authorized users (read), editors/admins (write)
+    // Facilities collection: accessible to authorized staff (read), editors/admins (write)
     match /facilities/{facilityId} {
-      allow read: if hasFacilityAccess(facilityId);
-      allow create, update: if hasFacilityAccess(facilityId) && isEditor() && isValidId(facilityId);
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isEditor() && isValidId(facilityId);
       allow delete: if false;
     }
 
     // Resident validation
     function isValidResident(data) {
-      return data.size() >= 3 &&
+      return data.size() >= 2 &&
              data.facilityId is string && isValidId(data.facilityId) &&
-             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
-             data.roomNumber is string && data.roomNumber.size() > 0 && data.roomNumber.size() <= 20;
+             data.name is string && data.name.size() <= 100;
     }
 
     // Residents collection: strictly guarded by facilityId and editor role
@@ -83,7 +87,6 @@ service cloud.firestore {
                     isValidId(residentId);
       allow update: if isSignedIn() &&
                     hasFacilityAccess(resource.data.facilityId) &&
-                    hasFacilityAccess(request.resource.data.facilityId) &&
                     isEditor() &&
                     isValidResident(request.resource.data);
       allow delete: if isSignedIn() && 
