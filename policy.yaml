@@ -1,0 +1,4 @@
+name: projects/vitalsign-pro-prod/policies/iam.managed.disableServiceAccountKeyCreation
+spec:
+  rules:
+  - enforce: false

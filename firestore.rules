@@ -1,0 +1,131 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // catch-all deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Administrator verification helper
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'tatsukikai8@tatsukikai.com') ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    // Role check: 'editor' or 'admin' has write permission
+    function isEditor() {
+      return isSignedIn() && (
+        isAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'editor' ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'))
+      );
+    }
+
+    // Helper to check if the authenticated user has access to a given facility
+    function hasFacilityAccess(facilityId) {
+      return isSignedIn() &&
+             facilityId is string &&
+             (
+               isAdmin() ||
+               (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                get(/databases/$(database)/documents/users/$(request.auth.uid)).data.allowedFacilities.hasAny([facilityId]))
+             );
+    }
+
+    // Users collection: user can read their own profile, admins can read & manage all users
+    match /users/{userId} {
+      allow read: if isSignedIn() && (
+        request.auth.uid == userId ||
+        isAdmin() ||
+        (resource.data.email is string && resource.data.email == request.auth.token.email)
+      );
+      allow create, update: if isSignedIn() && (
+        isAdmin() ||
+        (request.auth.uid == userId && isValidId(userId))
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Facilities collection: accessible to authorized users (read), editors/admins (write)
+    match /facilities/{facilityId} {
+      allow read: if hasFacilityAccess(facilityId);
+      allow create, update: if hasFacilityAccess(facilityId) && isEditor() && isValidId(facilityId);
+      allow delete: if false;
+    }
+
+    // Resident validation
+    function isValidResident(data) {
+      return data.size() >= 3 &&
+             data.facilityId is string && isValidId(data.facilityId) &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.roomNumber is string && data.roomNumber.size() > 0 && data.roomNumber.size() <= 20;
+    }
+
+    // Residents collection: strictly guarded by facilityId and editor role
+    match /residents/{residentId} {
+      allow read: if isSignedIn() && hasFacilityAccess(resource.data.facilityId);
+      allow create: if isSignedIn() &&
+                    hasFacilityAccess(request.resource.data.facilityId) &&
+                    isEditor() &&
+                    isValidResident(request.resource.data) &&
+                    isValidId(residentId);
+      allow update: if isSignedIn() &&
+                    hasFacilityAccess(resource.data.facilityId) &&
+                    hasFacilityAccess(request.resource.data.facilityId) &&
+                    isEditor() &&
+                    isValidResident(request.resource.data);
+      allow delete: if isSignedIn() && 
+                    hasFacilityAccess(resource.data.facilityId) && 
+                    isEditor();
+    }
+
+    // VitalRecord validation
+    function isValidVitalRecord(data) {
+      return data.size() >= 3 &&
+             data.facilityId is string && isValidId(data.facilityId) &&
+             data.residentId is string && isValidId(data.residentId) &&
+             data.date is string && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    // Vital Records collection: strictly guarded by facilityId and editor role
+    match /vital_records/{recordId} {
+      allow read: if isSignedIn() && hasFacilityAccess(resource.data.facilityId);
+      allow create: if isSignedIn() &&
+                    hasFacilityAccess(request.resource.data.facilityId) &&
+                    isEditor() &&
+                    isValidVitalRecord(request.resource.data) &&
+                    isValidId(recordId);
+      allow update: if isSignedIn() &&
+                    hasFacilityAccess(resource.data.facilityId) &&
+                    hasFacilityAccess(request.resource.data.facilityId) &&
+                    isEditor() &&
+                    isValidVitalRecord(request.resource.data);
+      allow delete: if isSignedIn() && 
+                    hasFacilityAccess(resource.data.facilityId) && 
+                    isEditor();
+    }
+
+    // Settings collection
+    match /settings/{settingId} {
+      allow read: if isSignedIn();
+      allow write: if isEditor();
+    }
+    
+    // Test collection for connection check
+    match /test/connection {
+      allow get: if true;
+    }
+  }
+}

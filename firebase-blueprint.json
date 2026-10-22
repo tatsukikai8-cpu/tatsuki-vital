@@ -1,0 +1,102 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "システムユーザー・職員プロファイル（兼務施設情報および管理者ロール）",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { 
+          "type": "string", 
+          "enum": ["editor", "viewer", "admin"],
+          "description": "権限レベル（editor: 編集者・入力更新可, viewer: 閲覧者・閲覧のみ, admin: 管理者）"
+        },
+        "allowedFacilities": {
+          "type": "array",
+          "description": "アクセス可能な施設IDリスト"
+        },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["email", "allowedFacilities"]
+    },
+    "Facility": {
+      "title": "Facility",
+      "description": "施設マスタ情報",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "Resident": {
+      "title": "Resident",
+      "description": "利用者情報",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "facilityId": { "type": "string" },
+        "name": { "type": "string" },
+        "roomNumber": { "type": "string" },
+        "order": { "type": "integer" }
+      },
+      "required": ["id", "facilityId", "name", "roomNumber"]
+    },
+    "VitalRecord": {
+      "title": "Vital Record",
+      "description": "バイタル記録",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "facilityId": { "type": "string" },
+        "residentId": { "type": "string" },
+        "residentName": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "temperature": { "type": "string" },
+        "systolic": { "type": "string" },
+        "diastolic": { "type": "string" },
+        "pulse": { "type": "string" },
+        "spo2": { "type": "string" },
+        "mealMorning": { "$ref": "#/entities/Meal" },
+        "mealNoon": { "$ref": "#/entities/Meal" },
+        "mealNight": { "$ref": "#/entities/Meal" },
+        "bowelCount": { "type": "string" },
+        "note": { "type": "string" },
+        "imageUrl": { "type": "string", "description": "添付写真のURL (Firebase Storage)" },
+        "imageStoragePath": { "type": "string", "description": "Firebase Storage内のファイルパス" },
+        "isAbsent": { "type": "boolean" }
+      },
+      "required": ["facilityId", "residentId", "date"]
+    },
+    "Meal": {
+      "title": "Meal",
+      "type": "object",
+      "properties": {
+        "main": { "type": "integer" },
+        "side": { "type": "integer" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "ユーザープロファイルおよび所属施設一覧・権限情報"
+    },
+    "/facilities/{facilityId}": {
+      "schema": "Facility",
+      "description": "施設情報マスタ"
+    },
+    "/residents/{residentId}": {
+      "schema": "Resident",
+      "description": "施設別利用者データ"
+    },
+    "/vital_records/{recordId}": {
+      "schema": "VitalRecord",
+      "description": "施設別バイタル・食事・排泄の記録データ"
+    }
+  }
+}
