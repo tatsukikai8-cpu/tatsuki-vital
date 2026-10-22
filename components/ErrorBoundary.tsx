@@ -1,5 +1,5 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
-import { AlertCircle, RefreshCw, LayoutGrid } from 'lucide-react';
+import { AlertCircle, RefreshCw } from 'lucide-react';
 
 interface Props {
   children: ReactNode;
@@ -11,8 +11,8 @@ interface State {
   error: Error | null;
 }
 
-export class ErrorBoundary extends Component<Props, State> {
-  public override state: State = {
+export class ErrorBoundary extends React.Component<Props, State> {
+  public state: State = {
     hasError: false,
     error: null
   };
@@ -21,7 +21,7 @@ export class ErrorBoundary extends Component<Props, State> {
     return { hasError: true, error };
   }
 
-  public override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("Uncaught error caught by ErrorBoundary:", error, errorInfo);
   }
 
@@ -30,47 +30,33 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.props.onReset) {
       try {
         this.props.onReset();
-      } catch (err) {
-        console.error("Error during ErrorBoundary onReset:", err);
+      } catch (e) {
+        console.error("Error during reset:", e);
       }
     }
   };
 
-  public override render() {
+  public render() {
     if (this.state.hasError) {
       return (
-        <div className="bg-white p-8 rounded-2xl border border-red-200 shadow-md max-w-xl mx-auto my-12 text-center space-y-4 animate-in fade-in">
-          <div className="w-14 h-14 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto border border-red-100">
-            <AlertCircle size={28} />
-          </div>
-          <div>
-            <h2 className="text-lg font-bold text-slate-800">画面の表示中にエラーが発生しました</h2>
-            <p className="text-xs text-slate-500 mt-1">
-              権限制限または通信の乱れにより画面が一時的に停止しました。下のボタンから一括入力画面へ安全にお戻りいただけます。
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-6 border border-slate-200 text-center">
+            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4 text-red-600">
+              <AlertCircle size={24} />
+            </div>
+            <h2 className="text-xl font-bold text-slate-800 mb-2">予期せぬエラーが発生しました</h2>
+            <p className="text-sm text-slate-600 mb-6">
+              ご不便をおかけして申し訳ありません。画面の再読み込みをお試しください。
             </p>
-            {this.state.error?.message && (
-              <p className="text-[11px] font-mono text-red-700 bg-red-50 p-2.5 rounded-lg mt-3 break-all border border-red-100 text-left">
-                {this.state.error.message}
-              </p>
-            )}
-          </div>
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-2 pt-2">
-            <button
-              type="button"
-              onClick={this.handleReset}
-              className="w-full sm:w-auto px-4 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold rounded-xl shadow transition-all flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <LayoutGrid size={15} />
-              <span>一括入力画面へ戻る</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <RefreshCw size={14} />
-              <span>画面を再読み込み</span>
-            </button>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button
+                onClick={this.handleReset}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-medium text-sm"
+              >
+                <RefreshCw size={16} />
+                再読み込み・復帰
+              </button>
+            </div>
           </div>
         </div>
       );
