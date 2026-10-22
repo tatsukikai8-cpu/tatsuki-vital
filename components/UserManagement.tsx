@@ -144,6 +144,8 @@ export const UserManagement: React.FC<UserManagementProps> = ({
     setFormSubmitting(true);
     try {
       const now = new Date().toISOString();
+      const isMaster = cleanEmail === 'tatsukikai8@tatsukikai.com';
+      const effectiveRole: UserRole = isMaster ? 'admin' : formRole;
 
       if (editingUser) {
         // Edit existing user doc
@@ -151,12 +153,12 @@ export const UserManagement: React.FC<UserManagementProps> = ({
         await setDoc(docRef, {
           email: cleanEmail,
           displayName: formDisplayName.trim(),
-          role: formRole,
+          role: effectiveRole,
           allowedFacilities: formFacilities,
           updatedAt: now
         }, { merge: true });
 
-        setActionSuccess(`「${cleanEmail}」の権限情報（ロール: ${formRole}）を更新しました`);
+        setActionSuccess(`「${cleanEmail}」の権限情報（ロール: ${effectiveRole}）を更新しました`);
       } else {
         // Create new user doc
         // Check if email already registered
@@ -172,13 +174,13 @@ export const UserManagement: React.FC<UserManagementProps> = ({
         await setDoc(doc(db, 'users', safeDocId), {
           email: cleanEmail,
           displayName: formDisplayName.trim() || cleanEmail.split('@')[0],
-          role: formRole,
+          role: effectiveRole,
           allowedFacilities: formFacilities,
           createdAt: now,
           updatedAt: now
         });
 
-        setActionSuccess(`「${cleanEmail}」（ロール: ${formRole}）を事前登録しました。該当のGoogleアカウントでログインするとアクセスが許可されます。`);
+        setActionSuccess(`「${cleanEmail}」（ロール: ${effectiveRole}）を事前登録しました。該当のGoogleアカウントでログインするとアクセスが許可されます。`);
       }
 
       setIsModalOpen(false);
@@ -191,8 +193,9 @@ export const UserManagement: React.FC<UserManagementProps> = ({
   };
 
   const handleDeleteUser = async (target: UserProfile) => {
-    if (target.email.toLowerCase() === currentUserEmail?.toLowerCase()) {
-      alert('現在ログイン中の管理者アカウント自身を削除することはできません。');
+    const targetEmail = target.email.toLowerCase();
+    if (targetEmail === currentUserEmail?.toLowerCase() || targetEmail === 'tatsukikai8@tatsukikai.com') {
+      alert('システム管理者（マスターアカウント）は削除できません。');
       return;
     }
 
@@ -209,8 +212,9 @@ export const UserManagement: React.FC<UserManagementProps> = ({
   };
 
   const handleToggleSuspend = async (target: UserProfile) => {
-    if (target.email.toLowerCase() === currentUserEmail?.toLowerCase()) {
-      alert('現在ログイン中のアカウントの権限を停止することはできません。');
+    const targetEmail = target.email.toLowerCase();
+    if (targetEmail === currentUserEmail?.toLowerCase() || targetEmail === 'tatsukikai8@tatsukikai.com') {
+      alert('システム管理者（マスターアカウント）の権限を停止することはできません。');
       return;
     }
 
@@ -367,7 +371,9 @@ export const UserManagement: React.FC<UserManagementProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {usersList.map((target) => {
-                  const isCurrent = target.email.toLowerCase() === currentUserEmail?.toLowerCase();
+                  const targetEmail = target.email.toLowerCase();
+                  const isCurrent = targetEmail === currentUserEmail?.toLowerCase();
+                  const isMaster = targetEmail === 'tatsukikai8@tatsukikai.com';
                   const isSuspended = target.allowedFacilities.length === 0;
                   const isInvited = target.uid.startsWith('invited_');
 
@@ -389,7 +395,12 @@ export const UserManagement: React.FC<UserManagementProps> = ({
                               <span className="font-bold text-slate-800 text-xs truncate">
                                 {target.displayName || '氏名未設定'}
                               </span>
-                              {isCurrent && (
+                              {isMaster && (
+                                <span className="text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 px-1.5 py-0.2 rounded">
+                                  マスター管理者
+                                </span>
+                              )}
+                              {isCurrent && !isMaster && (
                                 <span className="text-[10px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.2 rounded">
                                   あなた
                                 </span>
@@ -478,13 +489,13 @@ export const UserManagement: React.FC<UserManagementProps> = ({
                           <button
                             type="button"
                             onClick={() => handleToggleSuspend(target)}
-                            disabled={isCurrent}
+                            disabled={isCurrent || isMaster}
                             className={`p-1.5 rounded-lg transition-all cursor-pointer ${
                               isSuspended
                                 ? 'text-emerald-600 hover:bg-emerald-50'
                                 : 'text-amber-600 hover:bg-amber-50'
                             } disabled:opacity-30 disabled:cursor-not-allowed`}
-                            title={isSuspended ? 'アクセスを再開' : '一時的にアクセスを停止'}
+                            title={isMaster ? 'マスター管理者は停止できません' : (isSuspended ? 'アクセスを再開' : '一時的にアクセスを停止')}
                           >
                             {isSuspended ? <Check size={15} /> : <Ban size={15} />}
                           </button>
@@ -492,9 +503,9 @@ export const UserManagement: React.FC<UserManagementProps> = ({
                           <button
                             type="button"
                             onClick={() => handleDeleteUser(target)}
-                            disabled={isCurrent}
+                            disabled={isCurrent || isMaster}
                             className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                            title="ユーザーを完全に削除"
+                            title={isMaster ? 'マスター管理者は削除できません' : 'ユーザーを完全に削除'}
                           >
                             <Trash2 size={15} />
                           </button>
