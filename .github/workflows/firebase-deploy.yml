@@ -8,9 +8,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: FirebaseExtended/action-hosting-deploy@v0
+      - uses: actions/setup-node@v4
         with:
-          repoToken: '${{ secrets.GITHUB_TOKEN }}'
-          firebaseServiceAccount: '${{ secrets.FIREBASE_TOKEN }}'
-          channelId: live
-          projectId: vitalsign-pro-prod
+          node-version: 20
+      - run: npm ci || npm install
+      - run: npm run build --if-present
+      - name: Deploy to Firebase
+        run: npx firebase-tools deploy --only hosting --project vitalsign-pro-prod --token "${{ secrets.FIREBASE_TOKEN }}"
